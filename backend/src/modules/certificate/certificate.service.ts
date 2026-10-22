@@ -10,13 +10,17 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, Brackets, Not } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import * as QRCode from 'qrcode';
 import { CreateCertificateDto } from './dto/create-certificate.dto';
 import { UpdateCertificateDto } from './dto/update-certificate.dto';
 import { IssueCertificateDto } from './dto/issue-certificate.dto';
 import { RevokeCertificateDto } from './dto/revoke-certificate.dto';
 import { SearchCertificatesDto } from './dto/search-certificates.dto';
-import { Certificate } from './entities/certificate.entity';
+import {
+  Certificate,
+  CertificateMetadata,
+} from './entities/certificate.entity';
 import { PUBLIC_ISSUER_COLUMNS } from './constants/public-issuer-columns';
 import { Verification } from './entities/verification.entity';
 import { Issuer } from '../issuers/entities/issuer.entity';
@@ -585,7 +589,9 @@ export class CertificateService {
         status: CertificateStatus.REVOKED,
         revocationReason: reason,
         revokedAt,
-        metadata,
+        // update() types JSON columns as a deep-partial entity; the metadata
+        // object is written whole, so the cast only satisfies that signature.
+        metadata: metadata as QueryDeepPartialEntity<CertificateMetadata>,
       },
     );
 

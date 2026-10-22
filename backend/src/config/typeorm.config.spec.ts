@@ -55,6 +55,9 @@ afterEach(() => {
   }
 });
 
+/** `ssl` exists only on some driver option types in the union. */
+const sslOf = (options: unknown): unknown => (options as { ssl?: unknown }).ssl;
+
 describe('typeOrmConfig never changes the schema at boot (#956)', () => {
   it('does not synchronize with a clean environment', () => {
     const { typeOrmConfig } = loadConfig();
@@ -165,16 +168,16 @@ describe('database SSL configuration (#1143)', () => {
     (ssl) => {
       const { config, dataSource } = loadDatabaseConfigurations(ssl);
 
-      expect(config.typeOrmConfig.ssl).toBeUndefined();
-      expect(dataSource.AppDataSource.options.ssl).toBeUndefined();
+      expect(sslOf(config.typeOrmConfig)).toBeUndefined();
+      expect(sslOf(dataSource.AppDataSource.options)).toBeUndefined();
     },
   );
 
   it('enables verified TLS in both application and migration configurations', () => {
     const { config, dataSource } = loadDatabaseConfigurations('true');
 
-    expect(config.typeOrmConfig.ssl).toBe(true);
-    expect(dataSource.AppDataSource.options.ssl).toBe(true);
+    expect(sslOf(config.typeOrmConfig)).toBe(true);
+    expect(sslOf(dataSource.AppDataSource.options)).toBe(true);
   });
 
   it('passes a supplied CA to both configurations without disabling verification', () => {
@@ -182,11 +185,11 @@ describe('database SSL configuration (#1143)', () => {
       '-----BEGIN CERTIFICATE-----\\nexample-ca\\n-----END CERTIFICATE-----';
     const { config, dataSource } = loadDatabaseConfigurations('true', ca);
 
-    const applicationSsl = config.typeOrmConfig.ssl as {
+    const applicationSsl = sslOf(config.typeOrmConfig) as {
       ca: string;
       rejectUnauthorized?: boolean;
     };
-    const migrationSsl = dataSource.AppDataSource.options.ssl as {
+    const migrationSsl = sslOf(dataSource.AppDataSource.options) as {
       ca: string;
       rejectUnauthorized?: boolean;
     };

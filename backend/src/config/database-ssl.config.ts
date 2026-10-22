@@ -7,9 +7,9 @@ import type { ConnectionOptions } from 'tls';
  * `rejectUnauthorized` unset so a configured CA is used for verification and
  * TLS is never weakened here.
  */
-export function databaseSslOptions(
-  env: NodeJS.ProcessEnv = process.env,
-): { ssl?: boolean | ConnectionOptions } {
+export function databaseSslOptions(env: NodeJS.ProcessEnv = process.env): {
+  ssl?: boolean | ConnectionOptions;
+} {
   const sslValue = env.DB_SSL?.trim().toLowerCase();
   const ca = env.DB_SSL_CA?.trim();
 

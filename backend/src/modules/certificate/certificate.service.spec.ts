@@ -706,7 +706,9 @@ describe('CertificateService', () => {
 
     it('does not report success when persistence fails', async () => {
       jest.spyOn(service, 'findOne').mockResolvedValue(buildCertificate());
-      certificateRepository.update.mockRejectedValue(new Error('database unavailable'));
+      certificateRepository.update.mockRejectedValue(
+        new Error('database unavailable'),
+      );
 
       await expect(
         service.revoke('cert-1239', 'policy violation'),
