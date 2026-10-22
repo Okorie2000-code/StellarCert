@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import { CertificateService } from './certificate.service';
 import { ConfigService } from '@nestjs/config';
@@ -575,6 +576,143 @@ describe('CertificateService', () => {
         OWNER,
         expect.objectContaining({ id: 'cert-1008' }),
       );
+    });
+  });
+
+  describe('revoke (#1239)', () => {
+    const buildCertificate = (overrides: Partial<Certificate> = {}) =>
+      ({
+        id: 'cert-1239',
+        issuerId: 'issuer-1239',
+        status: CertificateStatus.ACTIVE,
+        title: 'Original title',
+        metadata: { program: 'Original program' },
+        ...overrides,
+      }) as Certificate;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      certificateRepository.update.mockResolvedValue({ affected: 1 });
+      webhooksService.triggerEvent.mockResolvedValue(undefined);
+    });
+
+    it('persists revocation fields in their dedicated columns', async () => {
+      const certificate = buildCertificate();
+      const revokedCertificate = buildCertificate({
+        status: CertificateStatus.REVOKED,
+        revocationReason: 'policy violation',
+        revokedAt: new Date('2026-10-22T12:00:00.000Z'),
+        metadata: {
+          program: 'Original program',
+          revocationReason: 'policy violation',
+          revokedAt: new Date('2026-10-22T12:00:00.000Z'),
+        },
+      });
+      jest
+        .spyOn(service, 'findOne')
+        .mockResolvedValueOnce(certificate)
+        .mockResolvedValueOnce(revokedCertificate);
+
+      const result = await service.revoke('cert-1239', 'policy violation');
+
+      expect(certificateRepository.update).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          status: CertificateStatus.REVOKED,
+          revocationReason: 'policy violation',
+          revokedAt: expect.any(Date),
+          metadata: expect.objectContaining({
+            program: 'Original program',
+            revocationReason: 'policy violation',
+            revokedAt: expect.any(Date),
+          }),
+        }),
+      );
+      expect(certificateRepository.update.mock.calls[0][1]).not.toHaveProperty(
+        'title',
+      );
+      expect(result).toBe(revokedCertificate);
+      expect(result.title).toBe('Original title');
+      expect(webhooksService.triggerEvent).toHaveBeenCalledWith(
+        WebhookEvent.CERTIFICATE_REVOKED,
+        revokedCertificate.issuerId,
+        expect.objectContaining({
+          revocationReason: 'policy violation',
+          revokedAt: revokedCertificate.revokedAt,
+        }),
+      );
+    });
+
+    it('rejects a duplicate revocation without modifying the original record', async () => {
+      const originalRevokedAt = new Date('2026-10-21T12:00:00.000Z');
+      const certificate = buildCertificate({
+        status: CertificateStatus.REVOKED,
+        revocationReason: 'original reason',
+        revokedAt: originalRevokedAt,
+        metadata: {
+          program: 'Original program',
+          revocationReason: 'original reason',
+          revokedAt: originalRevokedAt,
+        },
+      });
+      jest.spyOn(service, 'findOne').mockResolvedValue(certificate);
+
+      let error: unknown;
+      try {
+        await service.revoke('cert-1239', 'replacement reason');
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getStatus()).toBe(409);
+
+      expect(certificateRepository.update).not.toHaveBeenCalled();
+      expect(certificate.revocationReason).toBe('original reason');
+      expect(certificate.revokedAt).toBe(originalRevokedAt);
+      expect(certificate.metadata).toEqual({
+        program: 'Original program',
+        revocationReason: 'original reason',
+        revokedAt: originalRevokedAt,
+      });
+      expect(webhooksService.triggerEvent).not.toHaveBeenCalled();
+    });
+
+    it('rejects a concurrent duplicate revocation when the guarded update affects no rows', async () => {
+      jest.spyOn(service, 'findOne').mockResolvedValue(buildCertificate());
+      certificateRepository.update.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.revoke('cert-1239', 'policy violation'),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(webhooksService.triggerEvent).not.toHaveBeenCalled();
+    });
+
+    it('preserves the existing not-found response', async () => {
+      jest
+        .spyOn(service, 'findOne')
+        .mockRejectedValue(
+          new NotFoundException('Certificate with ID missing not found'),
+        );
+
+      await expect(
+        service.revoke('missing', 'policy violation'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(certificateRepository.update).not.toHaveBeenCalled();
+      expect(webhooksService.triggerEvent).not.toHaveBeenCalled();
+    });
+
+    it('does not report success when persistence fails', async () => {
+      jest.spyOn(service, 'findOne').mockResolvedValue(buildCertificate());
+      certificateRepository.update.mockRejectedValue(new Error('database unavailable'));
+
+      await expect(
+        service.revoke('cert-1239', 'policy violation'),
+      ).rejects.toThrow('database unavailable');
+
+      expect(webhooksService.triggerEvent).not.toHaveBeenCalled();
     });
   });
 

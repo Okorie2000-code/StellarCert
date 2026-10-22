@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, Brackets } from 'typeorm';
+import { Repository, DataSource, Brackets, Not } from 'typeorm';
 import * as QRCode from 'qrcode';
 import { CreateCertificateDto } from './dto/create-certificate.dto';
 import { UpdateCertificateDto } from './dto/update-certificate.dto';
@@ -563,16 +563,37 @@ export class CertificateService {
   async revoke(id: string, reason?: string): Promise<Certificate> {
     const certificate = await this.findOne(id);
 
-    certificate.status = CertificateStatus.REVOKED;
-    if (reason) {
-      certificate.metadata = {
-        ...certificate.metadata,
-        revocationReason: reason,
-        revokedAt: new Date(),
-      };
+    if (certificate.status === CertificateStatus.REVOKED) {
+      throw new ConflictException('Certificate has already been revoked');
     }
 
-    const savedCertificate = await this.certificateRepository.save(certificate);
+    const revokedAt = new Date();
+    const metadata = reason
+      ? {
+          ...certificate.metadata,
+          revocationReason: reason,
+          revokedAt,
+        }
+      : certificate.metadata;
+
+    // Guard the update by the current status as well as the pre-check above.
+    // This keeps a concurrent second request from overwriting the first
+    // revocation reason or timestamp.
+    const updateResult = await this.certificateRepository.update(
+      { id, status: Not(CertificateStatus.REVOKED) },
+      {
+        status: CertificateStatus.REVOKED,
+        revocationReason: reason,
+        revokedAt,
+        metadata,
+      },
+    );
+
+    if (updateResult.affected !== 1) {
+      throw new ConflictException('Certificate has already been revoked');
+    }
+
+    const savedCertificate = await this.findOne(id);
 
     // Trigger webhook event
     await this.webhooksService.triggerEvent(
@@ -581,8 +602,8 @@ export class CertificateService {
       {
         id: savedCertificate.id,
         status: savedCertificate.status,
-        revocationReason: reason,
-        revokedAt: new Date(),
+        revocationReason: savedCertificate.revocationReason,
+        revokedAt: savedCertificate.revokedAt,
       },
     );
 
