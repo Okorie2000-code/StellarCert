@@ -45,6 +45,14 @@ class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  DB_SSL?: string;
+
+  @IsOptional()
+  @IsString()
+  DB_SSL_CA?: string;
+
+  @IsOptional()
+  @IsString()
   JWT_SECRET?: string;
 
   @IsString()
@@ -257,6 +265,8 @@ export function validateEnv(
       DB_USERNAME: e('DB_USERNAME') || 'postgres',
       DB_PASSWORD: e('DB_PASSWORD') || 'password',
       DB_NAME: e('DB_NAME') || 'stellarcert',
+      DB_SSL: e('DB_SSL'),
+      DB_SSL_CA: e('DB_SSL_CA'),
       JWT_SECRET: e('JWT_SECRET'),
       JWT_ACCESS_SECRET: e('JWT_ACCESS_SECRET') || e('JWT_SECRET'),
       JWT_REFRESH_SECRET: e('JWT_REFRESH_SECRET') || e('JWT_SECRET'),

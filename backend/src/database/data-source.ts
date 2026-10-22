@@ -16,6 +16,7 @@
  */
 import { DataSource } from 'typeorm';
 import * as path from 'path';
+import { databaseSslOptions } from '../config/database-ssl.config';
 
 // When running via the CLI the source is compiled JS under dist/.
 // Migrations are therefore loaded from dist/database/migrations/*.js
@@ -30,6 +31,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'stellarwave_user',
   password: process.env.DB_PASSWORD || 'stellarwave_password',
   database: process.env.DB_NAME || 'stellarwave',
+  ...databaseSslOptions(),
   // Entities and migrations use the compiled JS paths in production;
   // fall back to TS sources when running with ts-node locally.
   entities: isCompiledJs
