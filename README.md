@@ -258,6 +258,8 @@ Environment Variables
 
 - `JWT_SECRET` — any string works for local development (e.g. `dev-secret`)
 - `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` — defaults in `.env.example` match `docker compose`
+- `DB_SSL` — set to `true` to require TLS for a managed PostgreSQL provider; it is disabled by default for local Docker PostgreSQL
+- `DB_SSL_CA` — optional PEM CA certificate used to verify the database server; requires `DB_SSL=true` (use `\n` for line breaks when the environment provider only accepts one line)
 
 **Optional (the app will start with warnings):**
 

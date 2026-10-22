@@ -17,6 +17,8 @@ type ConfigModule = typeof import('./typeorm.config');
 type DataSourceModule = typeof import('../database/data-source');
 
 const ORIGINAL_FLAG = process.env.TYPEORM_SYNCHRONIZE;
+const ORIGINAL_DB_SSL = process.env.DB_SSL;
+const ORIGINAL_DB_SSL_CA = process.env.DB_SSL_CA;
 
 /** Re-evaluates the module so it reads the environment under test. */
 function loadConfig(flag?: string): ConfigModule {
@@ -38,6 +40,18 @@ afterEach(() => {
     delete process.env.TYPEORM_SYNCHRONIZE;
   } else {
     process.env.TYPEORM_SYNCHRONIZE = ORIGINAL_FLAG;
+  }
+
+  if (ORIGINAL_DB_SSL === undefined) {
+    delete process.env.DB_SSL;
+  } else {
+    process.env.DB_SSL = ORIGINAL_DB_SSL;
+  }
+
+  if (ORIGINAL_DB_SSL_CA === undefined) {
+    delete process.env.DB_SSL_CA;
+  } else {
+    process.env.DB_SSL_CA = ORIGINAL_DB_SSL_CA;
   }
 });
 
@@ -120,5 +134,81 @@ describe('the CLI DataSource still owns the migrations', () => {
       .filter((file) => extensions.some((ext) => file.endsWith(ext)));
 
     expect(matching.length).toBeGreaterThan(0);
+  });
+});
+
+describe('database SSL configuration (#1143)', () => {
+  function loadDatabaseConfigurations(ssl?: string, ca?: string) {
+    if (ssl === undefined) {
+      delete process.env.DB_SSL;
+    } else {
+      process.env.DB_SSL = ssl;
+    }
+
+    if (ca === undefined) {
+      delete process.env.DB_SSL_CA;
+    } else {
+      process.env.DB_SSL_CA = ca;
+    }
+
+    let config!: ConfigModule;
+    let dataSource!: DataSourceModule;
+    jest.isolateModules(() => {
+      config = require('./typeorm.config') as ConfigModule;
+      dataSource = require('../database/data-source') as DataSourceModule;
+    });
+    return { config, dataSource };
+  }
+
+  it.each([undefined, 'false', ' FALSE '])(
+    'leaves SSL disabled when DB_SSL is %p',
+    (ssl) => {
+      const { config, dataSource } = loadDatabaseConfigurations(ssl);
+
+      expect(config.typeOrmConfig.ssl).toBeUndefined();
+      expect(dataSource.AppDataSource.options.ssl).toBeUndefined();
+    },
+  );
+
+  it('enables verified TLS in both application and migration configurations', () => {
+    const { config, dataSource } = loadDatabaseConfigurations('true');
+
+    expect(config.typeOrmConfig.ssl).toBe(true);
+    expect(dataSource.AppDataSource.options.ssl).toBe(true);
+  });
+
+  it('passes a supplied CA to both configurations without disabling verification', () => {
+    const ca =
+      '-----BEGIN CERTIFICATE-----\\nexample-ca\\n-----END CERTIFICATE-----';
+    const { config, dataSource } = loadDatabaseConfigurations('true', ca);
+
+    const applicationSsl = config.typeOrmConfig.ssl as {
+      ca: string;
+      rejectUnauthorized?: boolean;
+    };
+    const migrationSsl = dataSource.AppDataSource.options.ssl as {
+      ca: string;
+      rejectUnauthorized?: boolean;
+    };
+    expect(applicationSsl).toEqual({
+      ca: '-----BEGIN CERTIFICATE-----\nexample-ca\n-----END CERTIFICATE-----',
+    });
+    expect(migrationSsl).toEqual(applicationSsl);
+    expect(applicationSsl.rejectUnauthorized).not.toBe(false);
+  });
+
+  it.each(['yes', '1', 'enabled'])('rejects invalid DB_SSL value %p', (ssl) => {
+    expect(() => loadDatabaseConfigurations(ssl)).toThrow(
+      'DB_SSL must be either true or false.',
+    );
+  });
+
+  it('rejects a CA unless TLS is enabled', () => {
+    expect(() => loadDatabaseConfigurations(undefined, 'test-ca')).toThrow(
+      'DB_SSL_CA requires DB_SSL=true.',
+    );
+    expect(() => loadDatabaseConfigurations('false', 'test-ca')).toThrow(
+      'DB_SSL_CA requires DB_SSL=true.',
+    );
   });
 });

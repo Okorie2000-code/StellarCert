@@ -1,4 +1,5 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+import { databaseSslOptions } from './database-ssl.config';
 
 /**
  * The application reads the schema; it never changes it (#956).
@@ -40,6 +41,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   username: process.env.DB_USERNAME || 'stellarwave_user',
   password: process.env.DB_PASSWORD || 'stellarwave_password',
   database: process.env.DB_NAME || 'stellarwave',
+  ...databaseSslOptions(),
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   synchronize: false,
   logging: process.env.NODE_ENV !== 'production',
