@@ -23,6 +23,23 @@ import { LoggingService } from '../../../common/logging/logging.service';
 import { UserRole } from '../../../common/constants/roles';
 import { CryptoUtils } from '../../../common/utils/crypto.utils';
 
+/**
+ * Length of the secret code that authorises a transfer.
+ *
+ * The code is the second factor for approving a transfer, so it has to be
+ * long enough that it cannot be brute-forced within the number of attempts a
+ * transfer tolerates. 12 characters of the uppercase alphanumeric alphabet
+ * leave 36^12 possibilities (~4.7e18).
+ */
+export const CONFIRMATION_CODE_LENGTH = 12;
+
+/**
+ * How many wrong confirmation codes a transfer tolerates before it is
+ * locked. Locked transfers can no longer be approved and have to be
+ * cancelled and initiated again.
+ */
+export const MAX_CONFIRMATION_CODE_ATTEMPTS = 5;
+
 export interface TransferResponseDTO {
   id: string;
   certificateId: string;
@@ -37,6 +54,10 @@ export interface TransferResponseDTO {
   expiresAt: Date | null;
   completedAt: Date | null;
   rejectionReason: string | null;
+  /** Confirmation codes submitted so far that did not match. */
+  failedAttempts: number;
+  /** Set once the transfer was locked after too many failed attempts. */
+  lockedAt: Date | null;
 }
 
 export interface TransferHistoryItemDTO {
@@ -89,6 +110,8 @@ export class CertificateTransferService {
       expiresAt: transfer.expiresAt ?? null,
       completedAt: transfer.completedAt ?? null,
       rejectionReason: transfer.rejectionReason ?? null,
+      failedAttempts: transfer.failedAttempts ?? 0,
+      lockedAt: transfer.lockedAt ?? null,
     };
   }
 
@@ -158,6 +181,7 @@ export class CertificateTransferService {
       initiatedBy: initiator.id,
       expiresAt,
       status: TransferStatus.PENDING,
+      failedAttempts: 0,
     });
 
     const savedTransfer = await this.transferRepository.save(transfer);
@@ -252,11 +276,19 @@ export class CertificateTransferService {
         completedAt: true,
         rejectionReason: true,
         initiatedAt: true,
+        failedAttempts: true,
+        lockedAt: true,
       },
     });
 
     if (!transfer) {
       throw new NotFoundException(`Transfer with ID ${transferId} not found`);
+    }
+
+    if (transfer.status === TransferStatus.LOCKED) {
+      throw new ConflictException(
+        'Transfer is locked after too many invalid confirmation code attempts. Cancel it and initiate a new transfer to receive a fresh code.',
+      );
     }
 
     if (transfer.status !== TransferStatus.PENDING) {
@@ -273,21 +305,26 @@ export class CertificateTransferService {
 
     // Only the intended new owner may accept a transfer; the code alone is
     // not enough, since anyone who learned it could otherwise approve it.
-    if (
-      approver.role !== UserRole.ADMIN &&
-      (!approver.email ||
-        approver.email.toLowerCase() !== transfer.toEmail?.toLowerCase())
-    ) {
-      throw new ForbiddenException(
-        'Only the intended new owner can approve this transfer',
-      );
-    }
+    await this.assertIntendedNewOwner(transfer, approver);
+
+    // The code is compared in constant time, and every wrong guess is
+    // counted. After MAX_CONFIRMATION_CODE_ATTEMPTS the transfer is locked,
+    // so a short code cannot be brute-forced.
+    const expectedCode = (transfer.confirmationCode ?? '').trim().toUpperCase();
+    const submittedCode =
+      typeof confirmationCode === 'string'
+        ? confirmationCode.trim().toUpperCase()
+        : '';
 
     if (
-      transfer.confirmationCode &&
-      transfer.confirmationCode !== confirmationCode
+      !expectedCode ||
+      !CryptoUtils.timingSafeEquals(expectedCode, submittedCode)
     ) {
-      throw new ForbiddenException('Invalid confirmation code');
+      await this.registerFailedConfirmationAttempt(
+        transfer,
+        approver,
+        ipAddress,
+      );
     }
 
     // Perform the actual ownership transfer
@@ -340,6 +377,8 @@ export class CertificateTransferService {
 
     transfer.status = TransferStatus.APPROVED;
     transfer.completedAt = new Date();
+    transfer.failedAttempts = 0;
+    transfer.lockedAt = null;
     const savedTransfer = await this.transferRepository.save(transfer);
 
     // Log audit entry
@@ -412,6 +451,136 @@ export class CertificateTransferService {
     return this.toTransferResponseDTO(savedTransfer);
   }
 
+  /**
+   * Ensures the request comes from the account the certificate is being
+   * transferred to.
+   *
+   * The account record is authoritative: the email carried by the access
+   * token is only a snapshot taken when the token was minted and can be
+   * stale. The account also has to have a verified email address, otherwise
+   * anybody could register the target address and take over the certificate.
+   */
+  private async assertIntendedNewOwner(
+    transfer: CertificateTransfer,
+    approver: { id: string },
+  ): Promise<void> {
+    const intendedEmail = (transfer.toEmail ?? '').trim().toLowerCase();
+
+    const approverUser = this.userRepository
+      ? await this.userRepository.findOne({
+          where: { id: approver.id },
+          select: { id: true, email: true, isEmailVerified: true },
+        })
+      : null;
+
+    const approverEmail = (approverUser?.email ?? '').trim().toLowerCase();
+
+    if (!intendedEmail || !approverUser || approverEmail !== intendedEmail) {
+      throw new ForbiddenException(
+        'Only the intended new owner can approve this transfer',
+      );
+    }
+
+    if (!approverUser.isEmailVerified) {
+      throw new ForbiddenException(
+        'Your email address must be verified before you can approve a certificate transfer',
+      );
+    }
+  }
+
+  /**
+   * Counts a wrong confirmation code and locks the transfer once the maximum
+   * number of attempts is reached. Always throws.
+   */
+  private async registerFailedConfirmationAttempt(
+    transfer: CertificateTransfer,
+    approver: { id: string },
+    ipAddress?: string,
+  ): Promise<never> {
+    const attempts = await this.incrementFailedAttempts(transfer.id);
+    const remaining = MAX_CONFIRMATION_CODE_ATTEMPTS - attempts;
+
+    await this.auditService.log({
+      action: AuditAction.UNAUTHORIZED_ACCESS,
+      resourceType: AuditResourceType.CERTIFICATE,
+      resourceId: transfer.certificateId,
+      userId: approver.id,
+      ipAddress: ipAddress || 'unknown',
+      metadata: {
+        transferId: transfer.id,
+        operation: 'transfer_confirmation_code_failed',
+        attempts,
+        maxAttempts: MAX_CONFIRMATION_CODE_ATTEMPTS,
+      },
+      status: 'failure',
+    });
+
+    if (remaining > 0) {
+      this.logger.warn(
+        `Invalid confirmation code for transfer ${transfer.id}. ` +
+          `${attempts}/${MAX_CONFIRMATION_CODE_ATTEMPTS} attempts used.`,
+      );
+      throw new ForbiddenException(
+        `Invalid confirmation code. ${remaining} attempt(s) remaining before this transfer is locked.`,
+      );
+    }
+
+    // Lock the transfer: it can no longer be approved, so the code cannot be
+    // guessed any further. A fresh transfer has to be initiated.
+    transfer.status = TransferStatus.LOCKED;
+    transfer.lockedAt = new Date();
+    transfer.failedAttempts = attempts;
+    await this.transferRepository.save(transfer);
+
+    await this.auditService.log({
+      action: AuditAction.UNAUTHORIZED_ACCESS,
+      resourceType: AuditResourceType.CERTIFICATE,
+      resourceId: transfer.certificateId,
+      userId: approver.id,
+      ipAddress: ipAddress || 'unknown',
+      metadata: {
+        transferId: transfer.id,
+        operation: 'transfer_locked',
+        attempts,
+        maxAttempts: MAX_CONFIRMATION_CODE_ATTEMPTS,
+      },
+      status: 'failure',
+    });
+
+    this.logger.warn(
+      `Transfer ${transfer.id} locked after ${attempts} invalid confirmation code attempts`,
+    );
+
+    throw new ConflictException(
+      'Too many invalid confirmation code attempts. This transfer is now locked; cancel it and initiate a new one.',
+    );
+  }
+
+  /**
+   * Increments the failed attempt counter of a transfer atomically and
+   * returns the new count.
+   *
+   * The counter is bumped with a single statement so that concurrent guesses
+   * cannot overwrite each other and slip past the limit. The raw statement is
+   * used on purpose: TypeORM's `update`/`increment` also write the
+   * `@UpdateDateColumn` of the entity, which is `completedAt` here, and that
+   * would mark a still-pending transfer as completed.
+   */
+  private async incrementFailedAttempts(transferId: string): Promise<number> {
+    const rows = await this.transferRepository.query(
+      `UPDATE "certificate_transfers"
+          SET "failedAttempts" = COALESCE("failedAttempts", 0) + 1
+        WHERE "id" = $1
+        RETURNING "failedAttempts"`,
+      [transferId],
+    );
+
+    const value = Array.isArray(rows) ? rows[0]?.failedAttempts : undefined;
+    const attempts = Number(value);
+
+    return Number.isFinite(attempts) ? attempts : 0;
+  }
+
   async rejectTransfer(
     transferId: string,
     reason: string,
@@ -426,7 +595,10 @@ export class CertificateTransferService {
       throw new NotFoundException(`Transfer with ID ${transferId} not found`);
     }
 
-    if (transfer.status !== TransferStatus.PENDING) {
+    if (
+      transfer.status !== TransferStatus.PENDING &&
+      transfer.status !== TransferStatus.LOCKED
+    ) {
       throw new ConflictException(
         `Transfer is not pending. Current status: ${transfer.status}`,
       );
@@ -473,7 +645,12 @@ export class CertificateTransferService {
       );
     }
 
-    if (transfer.status !== TransferStatus.PENDING) {
+    // A locked transfer can be cancelled too, otherwise the certificate
+    // would be stuck with it and no fresh transfer could be initiated.
+    if (
+      transfer.status !== TransferStatus.PENDING &&
+      transfer.status !== TransferStatus.LOCKED
+    ) {
       throw new ConflictException(
         `Transfer is not pending. Current status: ${transfer.status}`,
       );
@@ -552,7 +729,9 @@ export class CertificateTransferService {
   private async generateConfirmationCode(): Promise<string> {
     const maxRetries = 10;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const code = CryptoUtils.generateAlphanumericCode(6);
+      const code = CryptoUtils.generateAlphanumericCode(
+        CONFIRMATION_CODE_LENGTH,
+      );
       const exists = await this.transferRepository.findOne({
         where: { confirmationCode: code },
         select: ['id'],

@@ -1,4 +1,11 @@
-import { IsString, IsEmail, IsOptional, IsNotEmpty } from 'class-validator';
+import {
+  IsString,
+  IsEmail,
+  IsOptional,
+  IsNotEmpty,
+  MinLength,
+  MaxLength,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TransferStatus } from '../entities/certificate-transfer.entity';
 
@@ -45,13 +52,15 @@ export class ApproveTransferDto {
   @IsNotEmpty()
   transferId: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'Confirmation code sent to the new owner',
-    example: 'AB12CD',
+    example: 'AB12CD34EF56',
   })
   @IsString()
-  @IsOptional()
-  confirmationCode?: string;
+  @IsNotEmpty()
+  @MinLength(6)
+  @MaxLength(64)
+  confirmationCode: string;
 }
 
 export class RejectTransferDto {

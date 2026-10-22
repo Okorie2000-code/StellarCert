@@ -73,7 +73,13 @@ export interface CertificateTransfer {
   fromUserId: string;
   toEmail: string;
   toUserId?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  status:
+    | 'pending'
+    | 'approved'
+    | 'rejected'
+    | 'cancelled'
+    | 'expired'
+    | 'locked';
   initiationReason?: string;
   rejectionReason?: string;
   confirmationCode?: string;
@@ -91,7 +97,7 @@ export interface InitiateTransferDto {
 
 export interface ApproveTransferDto {
   transferId: string;
-  confirmationCode?: string;
+  confirmationCode: string;
 }
 
 export interface RejectTransferDto {

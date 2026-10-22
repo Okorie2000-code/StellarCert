@@ -81,7 +81,26 @@ export class CryptoUtils {
   }
 
   /**
-   * Creates an HMAC signature
+   * Compares two strings in constant time.
+   *
+   * `===` short-circuits on the first differing byte, which leaks how much of
+   * a secret was guessed correctly. Use this for one-time codes and other
+   * values an attacker may guess repeatedly.
+   */
+  static timingSafeEquals(a: string, b: string): boolean {
+    const left = Buffer.from(a ?? '', 'utf8');
+    const right = Buffer.from(b ?? '', 'utf8');
+    if (left.length !== right.length) {
+      return false;
+    }
+    if (left.length === 0) {
+      return true;
+    }
+    return crypto.timingSafeEqual(left, right);
+  }
+
+  /**
+   * Generates an HMAC signature
    */
   static createHMAC(data: string, secret: string): string {
     return crypto.createHmac('sha256', secret).update(data).digest('hex');

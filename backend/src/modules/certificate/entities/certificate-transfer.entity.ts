@@ -16,6 +16,12 @@ export enum TransferStatus {
   REJECTED = 'rejected',
   CANCELLED = 'cancelled',
   EXPIRED = 'expired',
+  /**
+   * Set when the confirmation code was guessed wrong too many times. The
+   * transfer can no longer be approved; it has to be cancelled and initiated
+   * again so a fresh confirmation code is issued.
+   */
+  LOCKED = 'locked',
 }
 
 @Entity('certificate_transfers')
@@ -67,6 +73,17 @@ export class CertificateTransfer {
 
   @Column({ nullable: true })
   initiatedBy: string;
+
+  /**
+   * Number of confirmation codes that were submitted and did not match. The
+   * transfer is locked once the count reaches the configured maximum.
+   */
+  @Column({ type: 'int', default: 0 })
+  failedAttempts: number;
+
+  /** When the transfer was locked after too many failed attempts. */
+  @Column({ type: 'timestamptz', nullable: true })
+  lockedAt?: Date | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   initiatedAt: Date;

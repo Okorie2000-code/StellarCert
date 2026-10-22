@@ -5,6 +5,8 @@ import {
   Body,
   Param,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
   Req,
 } from '@nestjs/common';
 import {
@@ -48,8 +50,13 @@ export class CertificateTransferController {
 
   @Post('approve')
   @UseGuards(JwtAuthGuard)
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @ApiOperation({ summary: 'Approve a certificate transfer' })
   @ApiResponse({ status: 200, description: 'Transfer approved successfully' })
+  @ApiResponse({
+    status: 403,
+    description: 'Approver is not the intended new owner',
+  })
   @ApiResponse({ status: 404, description: 'Transfer not found' })
   async approveTransfer(
     @Body() dto: ApproveTransferDto,
