@@ -575,10 +575,22 @@ export class CertificateTransferService {
       [transferId],
     );
 
-    const value = Array.isArray(rows) ? rows[0]?.failedAttempts : undefined;
-    const attempts = Number(value);
+    // For an UPDATE ... RETURNING, TypeORM's Postgres driver resolves to
+    // `[returnedRows, affectedCount]`, not to the rows themselves. Reading
+    // `rows[0].failedAttempts` therefore always saw undefined, the count was
+    // reported as 0 and the transfer was never locked.
+    const returned: Array<{ failedAttempts?: unknown }> =
+      Array.isArray(rows) && Array.isArray(rows[0]) ? rows[0] : rows;
+    const attempts = Number(returned?.[0]?.failedAttempts);
 
-    return Number.isFinite(attempts) ? attempts : 0;
+    if (!Number.isFinite(attempts)) {
+      // Never report "no attempts" on an unreadable result: that is exactly
+      // the failure mode that disabled the lockout.
+      throw new Error(
+        `Could not read the failed-attempt count for transfer ${transferId}`,
+      );
+    }
+    return attempts;
   }
 
   async rejectTransfer(

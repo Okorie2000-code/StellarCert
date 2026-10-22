@@ -315,7 +315,8 @@ describe('CertificateTransferService', () => {
     it('rejects an empty confirmation code instead of approving', async () => {
       const transfer = pendingTransfer();
       transferRepo.findOne.mockResolvedValue(transfer);
-      transferRepo.query.mockResolvedValue([{ failedAttempts: 1 }]);
+      // Real Postgres shape for UPDATE ... RETURNING: [rows, affectedCount].
+      transferRepo.query.mockResolvedValue([[{ failedAttempts: 1 }], 1]);
 
       await expect(
         service.approveTransfer(
@@ -336,7 +337,8 @@ describe('CertificateTransferService', () => {
     it('counts a wrong confirmation code and reports the remaining attempts', async () => {
       const transfer = pendingTransfer();
       transferRepo.findOne.mockResolvedValue(transfer);
-      transferRepo.query.mockResolvedValue([{ failedAttempts: 1 }]);
+      // Real Postgres shape for UPDATE ... RETURNING: [rows, affectedCount].
+      transferRepo.query.mockResolvedValue([[{ failedAttempts: 1 }], 1]);
 
       await expect(
         service.approveTransfer(
@@ -366,7 +368,8 @@ describe('CertificateTransferService', () => {
       let attempts = 0;
       transferRepo.query.mockImplementation(() => {
         attempts += 1;
-        return Promise.resolve([{ failedAttempts: attempts }]);
+        // Real Postgres shape for UPDATE ... RETURNING: [rows, affectedCount].
+        return Promise.resolve([[{ failedAttempts: attempts }], 1]);
       });
 
       for (let i = 0; i < MAX_CONFIRMATION_CODE_ATTEMPTS - 1; i++) {

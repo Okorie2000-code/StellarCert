@@ -5,7 +5,9 @@ describe('AddTransferConfirmationLockout', () => {
 
   const runner = () => {
     const query = jest.fn().mockResolvedValue(undefined);
-    return { query } as never as { query: jest.Mock } & import('typeorm').QueryRunner;
+    return { query } as never as {
+      query: jest.Mock;
+    } & import('typeorm').QueryRunner;
   };
 
   it('adds the locked label to the transfer status enum', async () => {
